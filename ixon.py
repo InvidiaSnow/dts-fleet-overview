@@ -4,7 +4,7 @@ import sys
 import base64
 import os
 import requests
-from .ui import C, ok, err, warn, heading, pick_from_list, print_numbered_list
+# from .ui import pick_from_list, print_numbered_list
 
 IXON_APP_ID   = "9J9IZzeT4xN4"
 IXON_API_BASE = "https://api.ayayot.com"
@@ -56,21 +56,21 @@ def authenticate() -> tuple[dict, list[dict]]:
 
         if needs_2fa:
             if otp == "":
-                otp = input(f"  Ixon 2FA code {C.DIM}(required for this account){C.RESET}: ").strip()
+                otp = input(f"  Ixon 2FA code required for this account: ").strip()
                 if otp:
                     continue
             else:
-                err("Invalid 2FA code.")
+                print("Invalid 2FA code.")
                 otp = input(f"  Ixon 2FA code: ").strip()
                 if otp:
                     continue
 
-        err(f"Ixon login failed — HTTP {resp.status_code}: {resp.text[:200]}")
+        print(f"Ixon login failed — HTTP {resp.status_code}: {resp.text[:200]}")
         sys.exit(1)
 
     token = resp.json()["data"]["secretId"]
     headers["Authorization"] = f"Bearer {token}"
-    ok("Ixon authenticated. Token valid for 1 hour.")
+    print("Ixon authenticated. Token valid for 1 hour.")
 
     # Company
     resp2 = requests.get(
@@ -81,7 +81,7 @@ def authenticate() -> tuple[dict, list[dict]]:
     headers["Api-Company"] = resp2.json()["data"][0]["publicId"]
 
     # Discover devices with InfluxDB servers
-    print(f"  {C.DIM}Discovering devices...{C.RESET}")
+    print(f"  Discovering devices...")
     resp3 = requests.get(
         f"{IXON_API_BASE}/agents",
         headers=headers,
@@ -105,10 +105,10 @@ def authenticate() -> tuple[dict, list[dict]]:
                     })
 
     if not devices:
-        err("No InfluxDB servers found on any device.")
+        print("No InfluxDB servers found on any device.")
         sys.exit(1)
 
-    ok(f"Found {len(devices)} device(s) with InfluxDB.")
+    print(f"Found {len(devices)} device(s) with InfluxDB.")
     return headers, devices
 
 
@@ -122,7 +122,7 @@ def pick_device(ixon_headers: dict, devices: list[dict],
     names = [f"{d['agent_name']} ({d['server_name']})" for d in devices]
     last = cfg.get("device", "")
 
-    heading("Select device")
+    print("Select device")
     print(f"\n  Available devices ({len(devices)}):")
     print_numbered_list(names, last)
 
@@ -130,7 +130,7 @@ def pick_device(ixon_headers: dict, devices: list[dict],
     device = devices[names.index(chosen)]
 
     # WebAccess session
-    print(f"  {C.DIM}Connecting to {device['agent_name']}...{C.RESET}")
+    print(f"  Connecting to {device['agent_name']}...")
     resp = requests.post(
         f"{IXON_API_BASE}/web-access",
         headers=ixon_headers,
@@ -138,7 +138,7 @@ def pick_device(ixon_headers: dict, devices: list[dict],
     )
 
     if resp.status_code in (401, 403):
-        warn("Ixon session expired. Re-authenticating...")
+        print("Ixon session expired. Re-authenticating...")
         new_headers, new_devices = authenticate()
         ixon_headers.clear()
         ixon_headers.update(new_headers)
@@ -148,9 +148,9 @@ def pick_device(ixon_headers: dict, devices: list[dict],
 
     if resp.status_code != 201:
         msg = resp.json().get("data", [{}])[0].get("message", resp.text[:200])
-        err(f"WebAccess failed: {msg}")
+        print(f"WebAccess failed: {msg}")
         if "not online" in msg.lower():
-            print(f"    {C.DIM}The device is offline. Try a different one.{C.RESET}")
+            print(f"    The device is offline. Try a different one.")
         return pick_device(ixon_headers, devices, cfg)
 
     proxy_url = resp.json()["data"]["url"]
@@ -161,11 +161,11 @@ def pick_device(ixon_headers: dict, devices: list[dict],
     api_token = (cfg.get("device_tokens", {}).get(device_key, "")
                  or os.environ.get("API_TOKEN", ""))
     if not api_token:
-        warn(f"No API token saved for {device_key}.")
-        print(f"    {C.DIM}Find it in InfluxDB -> Load Data -> API Tokens{C.RESET}")
+        print(f"No API token saved for {device_key}.")
+        print(f"    Find it in InfluxDB -> Load Data -> API Tokens")
         api_token = input("  InfluxDB API token: ").strip()
         if not api_token:
-            err("Cannot connect without an API token.")
+            print("Cannot connect without an API token.")
             return pick_device(ixon_headers, devices, cfg)
         # Save for next time
         device_tokens = cfg.get("device_tokens", {})
@@ -179,13 +179,13 @@ def pick_device(ixon_headers: dict, devices: list[dict],
     # Verify connection — prompt for new token on 401
     test = session.get(f"{base_url}/api/v2/buckets", timeout=15)
     if test.status_code == 200:
-        ok(f"Connected to {device['agent_name']}.")
+        print(f"Connected to {device['agent_name']}.")
     elif test.status_code == 401:
-        warn(f"API token rejected (401) for {device_key}.")
-        print(f"    {C.DIM}Generate a new token in InfluxDB -> Load Data -> API Tokens{C.RESET}")
+        print(f"API token rejected (401) for {device_key}.")
+        print(f"    Generate a new token in InfluxDB -> Load Data -> API Tokens")
         api_token = input("  Enter a new InfluxDB API token: ").strip()
         if not api_token:
-            err("Cannot connect without a valid API token.")
+            print("Cannot connect without a valid API token.")
             return pick_device(ixon_headers, devices, cfg)
         # Update saved token and retry
         device_tokens = cfg.get("device_tokens", {})
@@ -194,11 +194,11 @@ def pick_device(ixon_headers: dict, devices: list[dict],
         session.headers["Authorization"] = f"Token {api_token}"
         test2 = session.get(f"{base_url}/api/v2/buckets", timeout=15)
         if test2.status_code == 200:
-            ok(f"Connected to {device['agent_name']}.")
+            print(f"Connected to {device['agent_name']}.")
         else:
-            err(f"Still failing (HTTP {test2.status_code}). Check the token and try again.")
+            print(f"Still failing (HTTP {test2.status_code}). Check the token and try again.")
             return pick_device(ixon_headers, devices, cfg)
     else:
-        warn(f"Proxy returned HTTP {test.status_code} — downloads may fail.")
+        print(f"Proxy returned HTTP {test.status_code} — downloads may fail.")
 
     return session, base_url, chosen
