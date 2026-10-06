@@ -2,7 +2,7 @@ import os
 import re
 import ixon
 from dotenv import load_dotenv
-import ixon #, influxdb
+import ixon, influxdb
 
 load_dotenv()  # reads .env into environment variables, if the file exists
 
@@ -36,13 +36,13 @@ def main():
     # DTS buckets
     ## Each DTS has it's own bucket in InfluxDB
 
-"""
     print("  Fetching DTS buckets...")
     buckets = influxdb.list_buckets(session, proxy_base)
     if not buckets:
         print("Could not list buckets.")
         return
-    buckets = sort_buckets_for_display(buckets) """
+    buckets = sort_buckets_for_display(buckets)
+    print(buckets)
 
 def sort_buckets_for_display(buckets: list[str]) -> list[str]:
     """Show PLS buckets first in numeric order, then other buckets in fetched order."""

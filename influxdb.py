@@ -2,7 +2,6 @@
 
 import requests
 from datetime import datetime
-from .ui import C, ok, warn, err, heading
 
 ORG_ID = "31b1bdd5d5103ead"
 
@@ -39,11 +38,11 @@ def flux_query(session: requests.Session, proxy_base: str, query: str,
         )
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
         if debug:
-            err(f"Connection error: {e}")
+            print(f"Connection error: {e}")
         return None
     if debug:
         if resp.status_code != 200:
-            print(f"    {C.RED}HTTP {resp.status_code}: {resp.text[:200]}{C.RESET}")
+            print(f"    HTTP {resp.status_code}: {resp.text[:200]}")
     return resp.text if resp.status_code == 200 else None
 
 
@@ -159,26 +158,26 @@ def get_time_range(session: requests.Session, proxy_base: str,
 
 def diagnose_bucket(session: requests.Session, proxy_base: str, bucket: str):
     """Print diagnostic info when a bucket seems empty."""
-    heading("Bucket diagnostics")
+    print("Bucket diagnostics")
     print(f"  Inspecting schema for bucket '{bucket}'...\n")
 
     measurements = list_measurements(session, proxy_base, bucket)
     fields = list_field_keys(session, proxy_base, bucket)
 
-    print(f"  Measurements: {C.BOLD}{measurements or '(none found)'}{C.RESET}")
-    print(f"  Fields:       {C.BOLD}{fields or '(none found)'}{C.RESET}")
+    print(f"  Measurements: {measurements or '(none found)'}")
+    print(f"  Fields:       {fields or '(none found)'}")
 
     if measurements:
         for m in measurements:
             tags = list_tag_keys(session, proxy_base, bucket, m)
-            print(f"  Tags in '{m}': {C.BOLD}{tags or '(none)'}{C.RESET}")
+            print(f"  Tags in '{m}': {tags or '(none)'}")
 
     if not measurements:
-        err("Bucket has no measurements — it may be empty or use a different schema.")
+        print("Bucket has no measurements — it may be empty or use a different schema.")
     elif "Data" not in measurements:
-        warn(f"Expected measurement 'Data' but found: {measurements}")
+        print(f"Expected measurement 'Data' but found: {measurements}")
     if fields and "Temperature" not in fields:
-        warn(f"Expected field 'Temperature' but found: {fields}")
+        print(f"Expected field 'Temperature' but found: {fields}")
     print()
 
 
