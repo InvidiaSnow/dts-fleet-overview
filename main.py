@@ -1,5 +1,8 @@
 import os
 import re
+import io
+import pandas as pd
+import matplotlib.pyplot as plt
 import ixon, influxdb
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
@@ -48,10 +51,10 @@ def main():
         print("Could not list buckets.")
         return
     buckets = sort_buckets_for_display(buckets)
-    print(buckets)
+
+    bucket = buckets[5] # Temporary testing only one bucket
 
     # Get bucket schema
-    bucket = buckets[0] # Temporary testing only one bucket
     measurement, field = discover_influxdb_schema(session, proxy_base, bucket)
     print(f"Measurement: {measurement}; field: {field}")
 
@@ -66,24 +69,25 @@ def main():
         return
 
 
-    # -- Import DTS data -- #
+    # -- Import DTS data as CSV -- #
 
     # Build query
     last_timestamp_str = total_time_range[1]
     last_timestamp = datetime.fromisoformat(last_timestamp_str)
-
     number_of_timestamps = 3
 
     query = influxdb.build_last_n_query(
         bucket, measurement, field, last_timestamp, number_of_timestamps)
 
-    # Test debug
-    print("Built a flux query")
-    print(query)
+    # Fetch data by running query
+    print(f"    Fetching data from the {number_of_timestamps} latest timestamps...")
 
-    # Run final query to fetch data
-    print(f"    Fetching data latest...")
     data_csv = influxdb.flux_query(session, proxy_base, query, debug=True)
+
+
+    # -- Validate and format DTS data -- #
+    
+    # Validate CSV output
     if data_csv:
         print(f"Fetched data")
     else:
@@ -99,11 +103,41 @@ def main():
     if len(data_csv) >= 1000:
         print(data_csv[0:1000])
 
-
     check_data_rows = [l for l in data_csv.splitlines() if l.strip() and not l.startswith("#")]
     if not check_data_rows:
         print("Received CSV with no data from InfluxDB query")
         return
+
+    # Format data from CSV
+
+    # Convert to pandas DataFrame
+    data_df = pd.read_csv(
+        io.StringIO(data_csv), # io is necessary because input is not a file
+        usecols=["_time", "_value", "Meter"],
+        parse_dates=["_time"] # converts to datetime
+        )
+
+    print("pandas DataFrame:")
+    print(data_df)
+
+    # Reshape into traces
+    traces = data_df.pivot(index="Meter", columns="_time", values="_value")
+
+
+    # -- Post process data -- #
+
+    # Calculate change per meter
+    dT = traces.diff()
+    dT.plot()
+    plt.show()
+
+    # -- Plot data -- #
+"""
+    traces.plot()                      # one line per timestamp, Meter on the x-axis
+    plt.xlabel("Meter")
+    plt.ylabel("Temperature (°C)")
+    plt.title("Last 3 traces")
+    plt.show()"""
 
     # Compare to now
     # current_time = datetime.now(timezone.utc)
