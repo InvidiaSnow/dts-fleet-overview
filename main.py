@@ -1,8 +1,8 @@
 import os
 import re
-import ixon
-from dotenv import load_dotenv
 import ixon, influxdb
+from dotenv import load_dotenv
+from datetime import datetime, timedelta, timezone
 
 load_dotenv()  # reads .env into environment variables, if the file exists
 
@@ -68,21 +68,45 @@ def main():
 
     # -- Import DTS data -- #
 
-    # Timestamps to pull
-    time_range_start = total_time_range[1]
-    # time_range_end = 
+    # Build query
+    last_timestamp_str = total_time_range[1]
+    last_timestamp = datetime.fromisoformat(last_timestamp_str)
 
-    data_csv = ""
+    number_of_timestamps = 3
 
-    # Validate result
-    if data_csv is None:
-        print("Failed to fetch CSV from InfluxDB query")
+    query = influxdb.build_last_n_query(
+        bucket, measurement, field, last_timestamp, number_of_timestamps)
+
+    # Test debug
+    print("Built a flux query")
+    print(query)
+
+    # Run final query to fetch data
+    print(f"    Fetching data latest...")
+    data_csv = influxdb.flux_query(session, proxy_base, query, debug=True)
+    if data_csv:
+        print(f"Fetched data")
+    else:
+        print("Failed to fetch latest data as CSV from InfluxDB query.")
+        print("Debug info:")
+        print(f'Bucket = {bucket}')
+        print(f'Last timestamp = {last_timestamp}')
+        print(f'Number of requested timestamps = {number_of_timestamps}')
+        print("Failed flux query:")
+        print(query)
         return
+
+    if len(data_csv) >= 1000:
+        print(data_csv[0:1000])
+
 
     check_data_rows = [l for l in data_csv.splitlines() if l.strip() and not l.startswith("#")]
     if not check_data_rows:
         print("Received CSV with no data from InfluxDB query")
         return
+
+    # Compare to now
+    # current_time = datetime.now(timezone.utc)
     
     # save_chunk(chunk_csv, folder, chunk_start, chunk_stop, system_label, raw=raw)
 

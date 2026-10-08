@@ -15,7 +15,7 @@ instance (via IXON), using an already-authenticated requests.Session.
 """
 
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # InfluxDB organisation ID. Required by the /api/v2/query endpoint.
 ORG_ID = "31b1bdd5d5103ead"
@@ -282,3 +282,47 @@ def build_chunk_query(bucket: str, measurement: str, field: str,
         '  |> sort(columns: ["_time"], desc: true)\n'
         '  |> sort(columns: ["Meter"], desc: false)'
     )
+
+def build_last_n_query(bucket: str, measurement: str, field: str,
+                      end: datetime, number: int) -> str:
+    """Build a Flux query for a given number of timestamps."""
+
+    # Create a search window leading up to the input end datetime
+    start = end - timedelta(minutes=30)
+    
+    # InfluxDB wants timestamps in RFC3339 format (UTC, ending in "Z").
+    start_rfc = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_rfc = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # First part of the flux query gets all data in the search window
+    query_part_search_window = (
+        'import "strings"\n'
+        f'data = from(bucket: "{bucket}")\n'
+        f'  |> range(start: {start_rfc}, stop: {end_rfc})\n'
+        f'  |> filter(fn: (r) => r["_measurement"] == "{measurement}")\n'
+        f'  |> filter(fn: (r) => r["_field"] == "{field}")\n'
+        '  |> filter(fn: (r) => not strings.containsAny(v: r["Meter"], chars: "-"))\n'
+        '  |> drop(columns: ["_result","_start","_stop","_field","_measurement","Serial number"])\n'
+        '  |> map(fn: (r) => ({r with Meter: float(v: r.Meter)}))\n'
+    )
+
+    # Second part extracts the last {number} of timestamps
+    query_part_extract_n_timestamps = (
+        'times = data\n'
+        '  |> group()\n'
+        '  |> unique(column: "_time")\n'
+        '  |> sort(columns: ["_time"], desc: true)\n'
+#        '  |> sort(columns: ["Meter"], desc: false)\n'
+        f'  |> limit(n:{number})\n'
+        '  |> findColumn(fn: (key) => true, column: "_time")\n'
+    )
+
+    # Third part outputs the full data where _time matches the extracted timestamps
+    query_part_output = (
+        'data\n'
+        '  |> filter(fn: (r) => contains(value: r._time, set: times))\n'
+        '  |> group()\n'
+        '  |> sort(columns: ["_time", "Meter"])\n'
+    )
+
+    return query_part_search_window + query_part_extract_n_timestamps + query_part_output
