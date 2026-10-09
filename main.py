@@ -54,66 +54,30 @@ def main():
     if not buckets:
         print("Could not list buckets.")
         return
-    buckets = sort_buckets_for_display(buckets)
+    all_buckets = sort_buckets_for_display(buckets)
 
-    print(buckets)
+    print(all_buckets)
     
-    bucket = buckets[2] # Temporary testing only one bucket
+    buckets = all_buckets[0:11] # Temporary testing fixed number of buckets
+    number_of_timestamps = 5 # From each bucket
 
-    # Get bucket schema
-    measurement, field = discover_influxdb_schema(session, proxy_base, bucket)
-    print(f"Measurement: {measurement}; field: {field}")
-
-    # Check latest timestamp
-    print(f"    Checking available data range...")
-    total_time_range = influxdb.get_time_range(session, proxy_base, bucket, measurement, None)
-    if total_time_range:
-        print(f"Data available: {total_time_range[0]} -> {total_time_range[1]}")
-    else:
-        print("Could not determine data range. The bucket may be empty or the query timed out.")
-        influxdb.diagnose_bucket(session, proxy_base, bucket)
-        return
-
-
-    # -- Import DTS data as CSV -- #
-
-    # Build query
-    last_timestamp_str = total_time_range[1]
-    last_timestamp = datetime.fromisoformat(last_timestamp_str)
-    number_of_timestamps = 5
-
-    query = influxdb.build_last_n_query(
-        bucket, measurement, field, last_timestamp, number_of_timestamps)
-
-    # Fetch data by running query
-    print(f"    Fetching data from the {number_of_timestamps} latest timestamps...")
-
-    data_csv = influxdb.flux_query(session, proxy_base, query, debug=True)
-
-
-    # -- Validate and format DTS data -- #
     
-    # Validate CSV output
-    if data_csv:
-        print(f"Fetched data")
-    else:
-        print("Failed to fetch latest data as CSV from InfluxDB query.")
-        print("Debug info:")
-        print(f'Bucket = {bucket}')
-        print(f'Last timestamp = {last_timestamp}')
-        print(f'Number of requested timestamps = {number_of_timestamps}')
-        print("Failed flux query:")
-        print(query)
-        return
+    # -- Fetch latest timestamps from each DTS bucket -- #
+    results = {}
+    for bucket in buckets:
+        data_csv = fetch_last_traces(session, proxy_base, bucket, number_of_timestamps)
 
-    if len(data_csv) >= 1000:
-        print(data_csv[0:1000])
+        if data_csv is None:
+            print(f"Skipping bucket {bucket}")
+            continue
 
-    check_data_rows = [l for l in data_csv.splitlines() if l.strip() and not l.startswith("#")]
-    if not check_data_rows:
-        print("Received CSV with no data from InfluxDB query")
-        return
+        results[bucket] = data_csv
+        Path(f"cache/{bucket}.csv").write_text(data_csv)   # one cache file per bucket
 
+    # -- Plot results -- #
+    
+
+"""
     # Test debug
     # Save csv for faster testing
     CACHE = Path("cache/last_traces.csv")
@@ -121,7 +85,7 @@ def main():
     CACHE.write_text(data_csv)
 
     plot_.main()
-
+"""
 
 def sort_buckets_for_display(buckets: list[str]) -> list[str]:
     """Show PLS buckets first in numeric order, then other buckets in fetched order."""
@@ -178,6 +142,62 @@ def discover_influxdb_schema(session, proxy_base, bucket: str) -> tuple[str, str
         print(f"Field: {field}")
 
     return measurement, field
+
+def fetch_last_traces(session, proxy_base, bucket: str, n: int) -> str | None:
+
+    # Get bucket schema
+    measurement, field = discover_influxdb_schema(session, proxy_base, bucket)
+    print(f"Measurement: {measurement}; field: {field}")
+
+    # Check latest timestamp
+    print(f"    Checking available data range...")
+    total_time_range = influxdb.get_time_range(session, proxy_base, bucket, measurement, None)
+    if total_time_range:
+        print(f"Data available: {total_time_range[0]} -> {total_time_range[1]}")
+    else:
+        print("Could not determine data range. The bucket may be empty or the query timed out.")
+        influxdb.diagnose_bucket(session, proxy_base, bucket)
+        return None
+
+
+    # -- Import DTS data as CSV -- #
+
+    # Build query
+    last_timestamp_str = total_time_range[1]
+    last_timestamp = datetime.fromisoformat(last_timestamp_str)
+
+    query = influxdb.build_last_n_query(
+        bucket, measurement, field, last_timestamp, n)
+
+    # Fetch data by running query
+    print(f"    Fetching data from the {n} latest timestamps...")
+
+    data_csv = influxdb.flux_query(session, proxy_base, query, debug=True)
+
+
+    # -- Validate CSV -- #
+    
+    if data_csv:
+        print(f"Fetched data")
+    else:
+        print("Failed to fetch latest data as CSV from InfluxDB query.")
+        print("Debug info:")
+        print(f'Bucket = {bucket}')
+        print(f'Last timestamp = {last_timestamp}')
+        print(f'Number of requested timestamps = {n}')
+        print("Failed flux query:")
+        print(query)
+        return None
+
+    if len(data_csv) >= 1000:
+        print(data_csv[0:1000])
+
+    check_data_rows = [l for l in data_csv.splitlines() if l.strip() and not l.startswith("#")]
+    if not check_data_rows:
+        print("Received CSV with no data from InfluxDB query")
+        return None
+
+    return data_csv
 
 if __name__ == "__main__":
     main()
