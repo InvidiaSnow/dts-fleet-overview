@@ -7,6 +7,10 @@ import ixon, influxdb
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 
+# Temporary testing debugging
+from pathlib import Path
+import plotting_dev as plot_
+
 load_dotenv()  # reads .env into environment variables, if the file exists
 
 API_TOKEN = os.environ["API_TOKEN"]
@@ -52,7 +56,9 @@ def main():
         return
     buckets = sort_buckets_for_display(buckets)
 
-    bucket = buckets[5] # Temporary testing only one bucket
+    print(buckets)
+    
+    bucket = buckets[2] # Temporary testing only one bucket
 
     # Get bucket schema
     measurement, field = discover_influxdb_schema(session, proxy_base, bucket)
@@ -74,7 +80,7 @@ def main():
     # Build query
     last_timestamp_str = total_time_range[1]
     last_timestamp = datetime.fromisoformat(last_timestamp_str)
-    number_of_timestamps = 3
+    number_of_timestamps = 5
 
     query = influxdb.build_last_n_query(
         bucket, measurement, field, last_timestamp, number_of_timestamps)
@@ -108,41 +114,13 @@ def main():
         print("Received CSV with no data from InfluxDB query")
         return
 
-    # Format data from CSV
+    # Test debug
+    # Save csv for faster testing
+    CACHE = Path("cache/last_traces.csv")
+    CACHE.parent.mkdir(exist_ok=True)
+    CACHE.write_text(data_csv)
 
-    # Convert to pandas DataFrame
-    data_df = pd.read_csv(
-        io.StringIO(data_csv), # io is necessary because input is not a file
-        usecols=["_time", "_value", "Meter"],
-        parse_dates=["_time"] # converts to datetime
-        )
-
-    print("pandas DataFrame:")
-    print(data_df)
-
-    # Reshape into traces
-    traces = data_df.pivot(index="Meter", columns="_time", values="_value")
-
-
-    # -- Post process data -- #
-
-    # Calculate change per meter
-    dT = traces.diff()
-    dT.plot()
-    plt.show()
-
-    # -- Plot data -- #
-"""
-    traces.plot()                      # one line per timestamp, Meter on the x-axis
-    plt.xlabel("Meter")
-    plt.ylabel("Temperature (°C)")
-    plt.title("Last 3 traces")
-    plt.show()"""
-
-    # Compare to now
-    # current_time = datetime.now(timezone.utc)
-    
-    # save_chunk(chunk_csv, folder, chunk_start, chunk_stop, system_label, raw=raw)
+    plot_.main()
 
 
 def sort_buckets_for_display(buckets: list[str]) -> list[str]:
