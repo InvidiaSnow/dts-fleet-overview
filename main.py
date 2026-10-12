@@ -16,9 +16,6 @@ load_dotenv()  # reads .env into environment variables, if the file exists
 API_TOKEN = os.environ["API_TOKEN"]
 IXON_EMAIL = os.environ["IXON_EMAIL"]
 
-# Debug
-print(IXON_EMAIL)
-
 def main():
     print("Running dts-fleet-overview main.py")
 
@@ -54,28 +51,35 @@ def main():
     if not buckets:
         print("Could not list buckets.")
         return
-    all_buckets = sort_buckets_for_display(buckets)
-
-    print(all_buckets)
+    all_buckets, dts_systems = sort_buckets_for_display(buckets)
     
     buckets = all_buckets[0:11] # Temporary testing fixed number of buckets
+    print(dts_systems)
     number_of_timestamps = 5 # From each bucket
-
     
     # -- Fetch latest timestamps from each DTS bucket -- #
+
     results = {}
-    for bucket in buckets:
+    for i, bucket in enumerate(buckets):
         data_csv = fetch_last_traces(session, proxy_base, bucket, number_of_timestamps)
 
         if data_csv is None:
             print(f"Skipping bucket {bucket}")
             continue
 
-        results[bucket] = data_csv
-        Path(f"cache/{bucket}.csv").write_text(data_csv)   # one cache file per bucket
+         # Use names as DTS-systems, which is more correct than "PLS"
+        results[dts_systems[i]] = data_csv
+        file_name = dts_systems[i]
+        Path(f"cache/{file_name}.csv").write_text(data_csv)   # one cache file per bucket
+
+    # -- Analyze results -- #
+
+    # Currently being performed in plotting_dev.py
+    # Planning to migrate this back here
 
     # -- Plot results -- #
-    
+
+    plot_.plot_overview(results)
 
 """
     # Test debug
@@ -87,32 +91,35 @@ def main():
     plot_.main()
 """
 
-def sort_buckets_for_display(buckets: list[str]) -> list[str]:
-    """Show PLS buckets first in numeric order, then other buckets in fetched order."""
+def sort_buckets_for_display(buckets: list[str]) -> tuple[list[str], list[str]]:
+    """Sort PLS buckets first in numeric order, then other buckets in fetched order."""
     pls_buckets = []
+    dts_systems = []
     other_buckets = []
-    for i, name in enumerate(buckets):
-        match = re.fullmatch(r"PLS[-_](\d+)", name, re.IGNORECASE)
+    for i, bucket_name in enumerate(buckets):
+        match = re.fullmatch(r"PLS[-_](\d+)", bucket_name, re.IGNORECASE)
         if match:
-            pls_buckets.append((int(match.group(1)), i, name))
+            pls_bucket_number_str = match.group(1)
+            pls_buckets.append(( int(pls_bucket_number_str) , i, bucket_name ))
+
+            if int(pls_bucket_number_str) < 10:
+                pls_bucket_number_str = "0" + pls_bucket_number_str
+
+            dts_systems.append(f"DTS-system_{pls_bucket_number_str}")
+            
         else:
-            other_buckets.append((i, name))
+            other_buckets.append((i, bucket_name))
 
     ordered_pls = [name for _, _, name in sorted(pls_buckets, key=lambda x: (x[0], x[1]))]
     ordered_other = [name for _, name in other_buckets]
-    return ordered_pls + ordered_other
+    ordered_dts = sorted(dts_systems)
+    return ordered_pls + ordered_other, ordered_dts
 
 
 def discover_influxdb_schema(session, proxy_base, bucket: str) -> tuple[str, str]:
     print(f"\n  Discovering schema for {bucket}...")
     measurements = influxdb.list_measurements(session, proxy_base, bucket, debug=True)
     fields = influxdb.list_field_keys(session, proxy_base, bucket, debug=True)
-
-    # Testing debugging
-    print("measurements")
-    print(measurements)
-    print("fields")
-    print(fields)
 
     measurement = "Data"
     field = "Temperature"
@@ -188,9 +195,6 @@ def fetch_last_traces(session, proxy_base, bucket: str, n: int) -> str | None:
         print("Failed flux query:")
         print(query)
         return None
-
-    if len(data_csv) >= 1000:
-        print(data_csv[0:1000])
 
     check_data_rows = [l for l in data_csv.splitlines() if l.strip() and not l.startswith("#")]
     if not check_data_rows:
