@@ -26,9 +26,36 @@ def main():
     "device": "Leak Detector 00 Cloud (InfluxDB)",
     }
 
+    # -- Fetch latest traces from each DTS system -- #
+
+    results = fetch_all_systems(cfg)
+    if not results:
+        print("No data fetched from any DTS system.")
+        return
+
+    # -- Analyze results -- #
+
+    # Currently being performed in plotting_dev.py
+    # Planning to migrate this back here
+
+    # -- Plot results -- #
+
+    # Runs fetch_all_systems again in the background every few minutes
+    # and redraws the plots, until the window is closed
+    plot_.plot_overview(results, refresh=lambda: fetch_all_systems(cfg))
+
+
+def fetch_all_systems(cfg: dict) -> dict[str, str]:
+    """Log in, connect, and fetch the latest traces from every DTS bucket.
+
+    Returns {dts_system: csv_text}, or {} if nothing could be fetched.
+    Called again on every auto-refresh, so an expired Ixon login or proxy
+    session gets renewed automatically.
+    """
 
     # -- Authenticate Ixon login -- #
 
+    # Uses the cached Ixon token while it is still valid, so this is usually instant
     ixon_headers, ixon_devices = ixon.authenticate()
 
 
@@ -45,7 +72,7 @@ def main():
     buckets = influxdb.list_buckets(session, proxy_base)
     if not buckets:
         print("Could not list buckets.")
-        return
+        return {}
     all_buckets, dts_systems = sort_buckets_for_display(buckets)
     
     buckets = all_buckets[0:11] # Temporary testing fixed number of buckets
@@ -73,14 +100,7 @@ def main():
         file_name = dts_system
         Path(f"cache/{file_name}.csv").write_text(data_csv)   # one cache file per bucket
 
-    # -- Analyze results -- #
-
-    # Currently being performed in plotting_dev.py
-    # Planning to migrate this back here
-
-    # -- Plot results -- #
-
-    plot_.plot_overview(results)
+    return results
 
 """
     # Test debug

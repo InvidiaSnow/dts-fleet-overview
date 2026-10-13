@@ -2,6 +2,9 @@ import os
 import re
 import io
 import math
+import queue
+import threading
+from collections.abc import Callable
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb, to_hex
@@ -13,6 +16,9 @@ from datetime import datetime, timedelta, timezone
 # Temporary testing debugging
 from pathlib import Path
 
+# -- Constants -- #
+LIVE_THRESHOLD_MINUTES = 4
+REFRESH_MINUTES = 2.0 # How often to fetch new data when auto-refresh is on
 
 # -- Plot themes -- #
 
@@ -45,31 +51,10 @@ THEMES = {
 
 def main():
     # Dev script specific:
+    # Read results from CSV-files in the sub-folder cache/
     results = {p.stem: p.read_text() for p in Path("cache").glob("*.csv")}
 
     plot_overview(results)
-
-    # -- Post process data -- #
-    
-    # Typical noisy data due to fiberoptic connectors
-    # noisy_start_length = 15
-
-    # Calculate change per meter
-    #dT = traces.diff()
-    #dT.plot()
-    #plt.show()
-
-    # Try to find end of fiber
-
-
-    # Trim length to relevant data
-
-    # -- Plot data -- #
-
-
-    # Display fiber length
-
-    # Display overview with html
 
 
 def csv_to_traces(data_csv: str) -> pd.DataFrame:
@@ -151,13 +136,35 @@ def fading_colors(trace_color: str, background_color: str, n: int) -> list[str]:
 
     
 
-def plot_overview(results: dict[str, str], ncols: int = 3):
-    """Create a figure with one sub-plot for each DTS bucket result"""
+def plot_overview(results: dict[str, str], ncols: int = 3,
+                  refresh: Callable[[], dict[str, str]] | None = None):
+    """Show a window with one sub-plot for each DTS system.
+
+    If refresh is given, it is called every REFRESH_MINUTES in the background
+    to fetch new results, and the plots are redrawn, until the window is closed.
+    """
+    fig = plt.figure(layout="constrained", facecolor=FIGURE_BACKGROUND)
+    draw_overview(fig, results, ncols)
+
+    # Keep the timers in a variable while the window is open,
+    # otherwise Python deletes them and they stop
+    refresh_timers = start_auto_refresh(fig, results, refresh, ncols) if refresh else None
+
+    fig.canvas.manager.window.state("zoomed")      # Tk (the default on Windows)
+    # fig.canvas.manager.window.showMaximized()    # if you have Qt installed instead
+
+    plt.show()                              # blocks until the window is closed
+
+
+def draw_overview(fig, results: dict[str, str], ncols: int = 3):
+    """Draw one sub-plot per DTS system onto fig, replacing what was there."""
+
+    # Start from an empty figure, since the number of systems may have changed
+    fig.clear()
 
     # Do some math to dynamically generate a grid of subplots
     nrows = math.ceil(len(results) / ncols)
-    fig, axes = plt.subplots(nrows, ncols, squeeze=False, layout="constrained",
-                             facecolor=FIGURE_BACKGROUND)
+    axes = fig.subplots(nrows, ncols, squeeze=False)
 
     # zip(...) pairs each subplot with one bucket and stops when the shorter of the two runs out.
 
@@ -181,7 +188,7 @@ def plot_overview(results: dict[str, str], ncols: int = 3):
             minutes = round(seconds/60)
             title = f"{DTS_system} - {minutes}min"
 
-        if age < pd.Timedelta(minutes=4): # Compare the full age, including days
+        if age < pd.Timedelta(minutes=LIVE_THRESHOLD_MINUTES): # Compare the full age, including days
             status = "Live"
         else:
             status = "Stale"
@@ -191,11 +198,61 @@ def plot_overview(results: dict[str, str], ncols: int = 3):
     for ax in axes.flat[len(results):]:     # hide empty subplots in the last row
         ax.set_visible(False)
 
+    # Show when the plots were last redrawn, in local time
+    fig.suptitle(f"Updated {datetime.now():%H:%M:%S}", color=TITLE_COLOR)
 
-    fig.canvas.manager.window.state("zoomed")      # Tk (the default on Windows)
-    # fig.canvas.manager.window.showMaximized()    # if you have Qt installed instead
 
-    plt.show()                              # once, at the end
+def start_auto_refresh(fig, results: dict[str, str],
+                       refresh: Callable[[], dict[str, str]], ncols: int):
+    """Call refresh every REFRESH_MINUTES and redraw fig with the new results.
+
+    Fetching takes a while (network), so it runs in a background thread,
+    which keeps the window responsive in the meantime. Only the GUI thread
+    may draw, so the background thread hands its results over through a
+    queue, and a timer in the GUI thread checks that queue every second.
+    """
+    current_results = dict(results)   # latest data per system, updated after each fetch
+    finished = queue.Queue()          # background thread -> GUI thread
+    fetch_thread = None
+
+    def fetch_in_background():
+        try:
+            new_results = refresh()
+        except (Exception, SystemExit) as e:  # ixon.py calls sys.exit() on some errors
+            print(f"Refresh failed: {e!r}")
+            new_results = {}
+        finished.put(new_results)
+
+    def start_fetch():
+        nonlocal fetch_thread  # lets this inner function replace the variable above
+        if fetch_thread and fetch_thread.is_alive():
+            return  # previous fetch is still running, skip this round
+        print(f"\nRefreshing data ({datetime.now():%H:%M:%S})...")
+        # daemon=True: don't keep the program running after the window is closed
+        fetch_thread = threading.Thread(target=fetch_in_background, daemon=True)
+        fetch_thread.start()
+
+    def redraw_if_finished():
+        try:
+            new_results = finished.get_nowait()
+        except queue.Empty:
+            return  # nothing new yet
+        # Systems that failed this time keep their old data, so their age
+        # keeps growing and they turn "Stale" instead of disappearing
+        current_results.update(new_results)
+        draw_overview(fig, current_results, ncols)
+        fig.canvas.draw_idle()
+
+    # Timers run their callback in the GUI thread while plt.show() is running
+    fetch_timer = fig.canvas.new_timer(interval=REFRESH_MINUTES * 60 * 1000)  # milliseconds
+    fetch_timer.add_callback(start_fetch)
+    fetch_timer.start()
+
+    check_timer = fig.canvas.new_timer(interval=1000)
+    check_timer.add_callback(redraw_if_finished)
+    check_timer.start()
+
+    return fetch_timer, check_timer
 
 if __name__ == "__main__":
     main()
