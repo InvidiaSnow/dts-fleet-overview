@@ -164,9 +164,9 @@ def list_serial_numbers(session: requests.Session, proxy_base: str,
     return values if values else None
 
 
-def get_time_range(session: requests.Session, proxy_base: str,
+def get_last_timestamp(session: requests.Session, proxy_base: str,
                    bucket: str, measurement: str,
-                   serial: str | None) -> tuple[str, str] | None:
+                   serial: str | None) -> str | None:
     """Checks last 10 years and returns (earliest_timestamp, latest_timestamp) or None."""
     # Optional extra filter line, only when we're looking at one device.
     serial_filter = (
@@ -176,19 +176,18 @@ def get_time_range(session: requests.Session, proxy_base: str,
     # Flux is a pipeline: each "|>" passes the rows on to the next step.
     # Here: all rows from the last 10 years for this measurement (and serial),
     # merged into a single table with group() so first()/last() see everything.
-    base_query = (
+    query = (
         f'from(bucket: "{bucket}")\n'
         f'  |> range(start: -10y)\n'
         f'  |> filter(fn: (r) => r["_measurement"] == "{measurement}")\n'
         f'{serial_filter}'
+        f'  |> last()\n'
+        f'  |> keep(columns: ["_time"])\n'
         f'  |> group()\n'
+        f'  |> max(column: "_time")'
     )
-    # Two queries: one for the oldest row, one for the newest. Keep only the
-    # timestamp column so the response is tiny.
-    first_raw = flux_query(session, proxy_base,
-                           base_query + '  |> first()\n  |> keep(columns: ["_time"])')
-    last_raw = flux_query(session, proxy_base,
-                          base_query + '  |> last()\n  |> keep(columns: ["_time"])')
+    # Keep only the timestamp column so the response is tiny.
+    last_raw = flux_query(session, proxy_base, query)
 
     def extract_time(csv_text: str) -> str | None:
         # Find the first value that looks like an RFC3339 timestamp,
@@ -202,10 +201,10 @@ def get_time_range(session: requests.Session, proxy_base: str,
                     return p
         return None
 
-    if first_raw and last_raw:
-        t1, t2 = extract_time(first_raw), extract_time(last_raw)
-        if t1 and t2:
-            return (t1, t2)
+    if last_raw:
+        t = extract_time(last_raw)
+        if t:
+            return t
     return None
 
 

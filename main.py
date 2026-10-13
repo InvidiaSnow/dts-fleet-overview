@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import ixon, influxdb
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 
 # Temporary testing debugging
 from pathlib import Path
@@ -15,6 +16,7 @@ load_dotenv()  # reads .env into environment variables, if the file exists
 
 API_TOKEN = os.environ["API_TOKEN"]
 IXON_EMAIL = os.environ["IXON_EMAIL"]
+NUMBER_OF_TIMESTAMPS = 3 # Number to get from each system
 
 def main():
     print("Running dts-fleet-overview main.py")
@@ -22,13 +24,6 @@ def main():
     # Hard-coded configs dictionary for now
     cfg = {
     "device": "Leak Detector 00 Cloud (InfluxDB)",
-    "bucket": "",
-    "serial": (),
-    "system_label": "",
-    "device_tokens": {
-        "Leak Detector 00 Cloud": "o-3RNpNHd0h1d01jDoSTN93TqMKz-TWUqNzUSLb28WuwQTbOlybgs32Rn65zWUDrDWCK0Yx5sk016tlyupne-A=="
-    },
-    "output_folder": ""
     }
 
 
@@ -54,22 +49,28 @@ def main():
     all_buckets, dts_systems = sort_buckets_for_display(buckets)
     
     buckets = all_buckets[0:11] # Temporary testing fixed number of buckets
-    print(dts_systems)
-    number_of_timestamps = 5 # From each bucket
+    print(buckets)
     
     # -- Fetch latest timestamps from each DTS bucket -- #
 
     results = {}
-    for i, bucket in enumerate(buckets):
-        data_csv = fetch_last_traces(session, proxy_base, bucket, number_of_timestamps)
+
+    # Using parallel queries with a thread pool from the standard library
+    # Output will still be in the correct order
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        data_csvs = pool.map(lambda bucket: fetch_last_traces(session, proxy_base, bucket, NUMBER_OF_TIMESTAMPS), buckets)
+
+    # Using dts_systems alongside buckets here because the bucket names are not ideal
+    for bucket, dts_system, data_csv in zip(buckets, dts_systems, data_csvs): # zip pairs dts_system 1 to csv 1
 
         if data_csv is None:
-            print(f"Skipping bucket {bucket}")
+            print(f"Skipping bucket {bucket} with data from DTS system {dts_system}")
             continue
 
-         # Use names as DTS-systems, which is more correct than "PLS"
-        results[dts_systems[i]] = data_csv
-        file_name = dts_systems[i]
+        # Use names as DTS-systems, which is more correct than "PLS"
+        # Building a dict with name-data pairs
+        results[dts_system] = data_csv
+        file_name = dts_system
         Path(f"cache/{file_name}.csv").write_text(data_csv)   # one cache file per bucket
 
     # -- Analyze results -- #
@@ -116,53 +117,16 @@ def sort_buckets_for_display(buckets: list[str]) -> tuple[list[str], list[str]]:
     return ordered_pls + ordered_other, ordered_dts
 
 
-def discover_influxdb_schema(session, proxy_base, bucket: str) -> tuple[str, str]:
-    print(f"\n  Discovering schema for {bucket}...")
-    measurements = influxdb.list_measurements(session, proxy_base, bucket, debug=True)
-    fields = influxdb.list_field_keys(session, proxy_base, bucket, debug=True)
+def fetch_last_traces(session, proxy_base, bucket: str, n: int) -> str | None:
 
+    # Set bucket schema
     measurement = "Data"
     field = "Temperature"
 
-    if not measurements:
-        print(f"No measurements found in bucket '{bucket}'.")
-        influxdb.diagnose_bucket(session, proxy_base, bucket)
-        return "", ""
-    elif "Data" not in measurements:
-        print(f"Measurement 'Data' not found. Available: {measurements}")
-        if len(measurements) == 1:
-            measurement = measurements[0]
-            print(f"Using measurement: {measurement}")
-        else:
-            print(f"Measurement: {measurement}")
-    else:
-        print(f"Measurement: {measurement}")
-
-    if fields and "Temperature" not in fields:
-        print(f"Field 'Temperature' not found. Available: {fields}")
-        if len(fields) == 1:
-            field = fields[0]
-            print(f"Using field: {field}")
-        else:
-            print(f"Fields: {fields}")
-    elif fields:
-        print(f"Field: {field}")
-
-    return measurement, field
-
-def fetch_last_traces(session, proxy_base, bucket: str, n: int) -> str | None:
-
-    # Get bucket schema
-    measurement, field = discover_influxdb_schema(session, proxy_base, bucket)
-    print(f"Measurement: {measurement}; field: {field}")
-
     # Check latest timestamp
-    print(f"    Checking available data range...")
-    total_time_range = influxdb.get_time_range(session, proxy_base, bucket, measurement, None)
-    if total_time_range:
-        print(f"Data available: {total_time_range[0]} -> {total_time_range[1]}")
-    else:
-        print("Could not determine data range. The bucket may be empty or the query timed out.")
+    last_timestamp_str = influxdb.get_last_timestamp(session, proxy_base, bucket, measurement, None)
+    if not last_timestamp_str:
+        print(f"Could not determine last timestamp in bucket {bucket}. The bucket may be empty or the query timed out.")
         influxdb.diagnose_bucket(session, proxy_base, bucket)
         return None
 
@@ -170,23 +134,18 @@ def fetch_last_traces(session, proxy_base, bucket: str, n: int) -> str | None:
     # -- Import DTS data as CSV -- #
 
     # Build query
-    last_timestamp_str = total_time_range[1]
     last_timestamp = datetime.fromisoformat(last_timestamp_str)
 
     query = influxdb.build_last_n_query(
         bucket, measurement, field, last_timestamp, n)
 
     # Fetch data by running query
-    print(f"    Fetching data from the {n} latest timestamps...")
-
     data_csv = influxdb.flux_query(session, proxy_base, query, debug=True)
 
 
     # -- Validate CSV -- #
     
-    if data_csv:
-        print(f"Fetched data")
-    else:
+    if not data_csv:
         print("Failed to fetch latest data as CSV from InfluxDB query.")
         print("Debug info:")
         print(f'Bucket = {bucket}')

@@ -4,17 +4,26 @@ import sys
 import base64
 import os
 import requests
+import json
+import time
+from pathlib import Path
 # from .ui import pick_from_list, print_numbered_list
 
 IXON_APP_ID   = "9J9IZzeT4xN4"
 IXON_API_BASE = "https://api.ayayot.com"
-
+TOKEN_CACHE = Path("cache/ixon_token.json")
 
 def authenticate() -> tuple[dict, list[dict]]:
     """Login to Ixon, discover devices with InfluxDB. Done once per session.
 
     Returns (ixon_headers, influx_devices).
     """
+
+    # First check if we have an authentication cached, which is not expired
+    cached = _load_cached_login()
+    if cached:
+        return cached # If exists and not expired, return this and skip the process
+
     email = os.environ.get("IXON_EMAIL") or input("  Ixon email: ").strip()
     password = os.environ.get("IXON_PASS") or input("  Ixon password: ").strip()
 
@@ -108,8 +117,12 @@ def authenticate() -> tuple[dict, list[dict]]:
         print("No InfluxDB servers found on any device.")
         sys.exit(1)
 
+    # Save authentication for the next hour
+    _save_cached_login(headers,devices)
+
     print(f"Found {len(devices)} device(s) with InfluxDB.")
     return headers, devices
+
 
 def start_session(ixon_headers: dict, devices: list[dict], cfg: dict
               ) -> tuple[requests.Session, str]:
@@ -133,7 +146,8 @@ def start_session(ixon_headers: dict, devices: list[dict], cfg: dict
 
     if resp.status_code in (401, 403):
         print("Ixon session expired. Re-authenticating...")
-        new_headers, new_devices = authenticate()
+        TOKEN_CACHE.unlink(missing_ok=True) # Delete the cache to force a real login
+        new_headers, new_devices = authenticate() # New login
         ixon_headers.clear()
         ixon_headers.update(new_headers)
         devices.clear()
@@ -153,6 +167,13 @@ def start_session(ixon_headers: dict, devices: list[dict], cfg: dict
     base_url = proxy_url.split("?")[0].rstrip("/")
 
     # InfluxDB API
+
+    api_token = os.environ.get("API_TOKEN", "") # Get API token from .env, else return empty string
+    if not api_token:
+        print("API_TOKEN is not set. Add it to your .env file.")
+        sys.exit(1)
+
+    """
     device_key = device["agent_name"]
     api_token = (cfg.get("device_tokens", {}).get(device_key, "")
                     or os.environ.get("API_TOKEN", ""))
@@ -165,7 +186,7 @@ def start_session(ixon_headers: dict, devices: list[dict], cfg: dict
             # Recursive iteration, calls itself again
             return start_session(ixon_headers, devices, cfg)
 
-        """ Testing
+        Testing
         # Save for next time
         device_tokens = cfg.get("device_tokens", {})
         device_tokens[device_key] = api_token
@@ -180,123 +201,27 @@ def start_session(ixon_headers: dict, devices: list[dict], cfg: dict
     if test.status_code == 200:
         print(f"Connected to {device['agent_name']}.")
     elif test.status_code == 401:
-        print(f"API token rejected (401) for {device_key}.")
+        print(f"API token rejected (401).")
         print(f"    Generate a new token in InfluxDB -> Load Data -> API Tokens")
-        api_token = input("  Enter a new InfluxDB API token: ").strip()
-        if not api_token:
-            print("Cannot connect without a valid API token.")
-            # Recursive iteration, calls itself again
-            return start_session(ixon_headers, devices, cfg)
-        
-        # Update saved token and retry
-        device_tokens = cfg.get("device_tokens", {})
-        device_tokens[device_key] = api_token
-        cfg["device_tokens"] = device_tokens
-        session.headers["Authorization"] = f"Token {api_token}"
-        test2 = session.get(f"{base_url}/api/v2/buckets", timeout=15)
-        if test2.status_code == 200:
-            print(f"Connected to {device['agent_name']}.")
-        else:
-            print(f"Still failing (HTTP {test2.status_code}). Check the token and try again.")
-            # Recursive iteration, calls itself again
-            return start_session(ixon_headers, devices, cfg)
-    else:
-        print(f"Proxy returned HTTP {test.status_code} — downloads may fail.")
 
+        sys.exit(1)
 
     return session, base_url
 
+def _load_cached_login() -> tuple[dict, list[dict]] | None:
+    """Return (headers, devices) if a cached IXON token is still valid."""
+    try:
+        data = json.loads(TOKEN_CACHE.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+    if data["expires_at"] - time.time() < 60:      # expired, or less than a minute left
+        return None
+    return data["headers"], data["devices"]
 
-
-def pick_device(ixon_headers: dict, devices: list[dict],
-                cfg: dict) -> tuple[requests.Session, str, str]:
-    """Let user pick a device, create WebAccess proxy session.
-
-    Auto re-authenticates if the Ixon token has expired.
-    Returns (session, proxy_base_url, device_display_name).
-    """
-    names = [f"{d['agent_name']} ({d['server_name']})" for d in devices]
-    last = cfg.get("device", "")
-
-    print("Select device")
-    print(f"\n  Available devices ({len(devices)}):")
-    print_numbered_list(names, last)
-
-    chosen = pick_from_list(names, "Select device", last)
-    device = devices[names.index(chosen)]
-
-    # -- WebAccess session -- #
-    print(f"  Connecting to {device['agent_name']}...")
-    resp = requests.post(
-        f"{IXON_API_BASE}/web-access",
-        headers=ixon_headers,
-        json={"server": {"publicId": device["server_id"]}},
-    )
-
-    if resp.status_code in (401, 403):
-        print("Ixon session expired. Re-authenticating...")
-        new_headers, new_devices = authenticate()
-        ixon_headers.clear()
-        ixon_headers.update(new_headers)
-        devices.clear()
-        devices.extend(new_devices)
-        # Recursive iteration, calls itself again
-        return pick_device(ixon_headers, devices, cfg)
-
-    if resp.status_code != 201:
-        msg = resp.json().get("data", [{}])[0].get("message", resp.text[:200])
-        print(f"WebAccess failed: {msg}")
-        if "not online" in msg.lower():
-            print(f"    The device is offline. Try a different one.")
-        # Recursive iteration, calls itself again
-        return pick_device(ixon_headers, devices, cfg)
-
-    proxy_url = resp.json()["data"]["url"]
-    base_url = proxy_url.split("?")[0].rstrip("/")
-
-    ## InfluxDB API token — check saved config, then .env, then prompt
-    device_key = device["agent_name"]
-    api_token = (cfg.get("device_tokens", {}).get(device_key, "")
-                 or os.environ.get("API_TOKEN", ""))
-    if not api_token:
-        print(f"No API token saved for {device_key}.")
-        print(f"    Find it in InfluxDB -> Load Data -> API Tokens")
-        api_token = input("  InfluxDB API token: ").strip()
-        if not api_token:
-            print("Cannot connect without an API token.")
-            return pick_device(ixon_headers, devices, cfg)
-        # Save for next time
-        device_tokens = cfg.get("device_tokens", {})
-        device_tokens[device_key] = api_token
-        cfg["device_tokens"] = device_tokens
-
-    session = requests.Session()
-    session.headers["Authorization"] = f"Token {api_token}"
-    session.get(proxy_url, timeout=15)
-
-    ## Verify connection — prompt for new token on 401
-    test = session.get(f"{base_url}/api/v2/buckets", timeout=15)
-    if test.status_code == 200:
-        print(f"Connected to {device['agent_name']}.")
-    elif test.status_code == 401:
-        print(f"API token rejected (401) for {device_key}.")
-        print(f"    Generate a new token in InfluxDB -> Load Data -> API Tokens")
-        api_token = input("  Enter a new InfluxDB API token: ").strip()
-        if not api_token:
-            print("Cannot connect without a valid API token.")
-            return pick_device(ixon_headers, devices, cfg)
-        # Update saved token and retry
-        device_tokens = cfg.get("device_tokens", {})
-        device_tokens[device_key] = api_token
-        cfg["device_tokens"] = device_tokens
-        session.headers["Authorization"] = f"Token {api_token}"
-        test2 = session.get(f"{base_url}/api/v2/buckets", timeout=15)
-        if test2.status_code == 200:
-            print(f"Connected to {device['agent_name']}.")
-        else:
-            print(f"Still failing (HTTP {test2.status_code}). Check the token and try again.")
-            return pick_device(ixon_headers, devices, cfg)
-    else:
-        print(f"Proxy returned HTTP {test.status_code} — downloads may fail.")
-
-    return session, base_url, chosen
+def _save_cached_login(headers: dict, devices: list[dict], lifetime: int = 3600):
+    TOKEN_CACHE.parent.mkdir(exist_ok=True)
+    TOKEN_CACHE.write_text(json.dumps({
+        "headers": headers,                         # includes the Bearer token + Api-Company
+        "devices": devices,
+        "expires_at": time.time() + lifetime,
+    }))
