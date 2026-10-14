@@ -150,8 +150,22 @@ def plot_overview(results: dict[str, str], ncols: int = 3,
     # otherwise Python deletes them and they stop
     refresh_timers = start_auto_refresh(fig, results, refresh, ncols) if refresh else None
 
-    fig.canvas.manager.window.state("zoomed")      # Tk (the default on Windows)
-    # fig.canvas.manager.window.showMaximized()    # if you have Qt installed instead
+    window_size = False
+    try:
+        fig.canvas.manager.window.state("zoomed")      # Tk (the default on Windows)
+        window_size = True
+    except:
+        print("First way of setting window size didn't work. Tk not installed")
+
+    if not window_size:
+        try:
+            fig.canvas.manager.window.showMaximized() # if you have Qt installed instead
+            window_size = True
+        except:
+            print("Second way of setting window size didn't work. Probably because not running on Windows 11")
+
+    if not window_size:
+        print("Failed to set window size")
 
     plt.show()                              # blocks until the window is closed
 

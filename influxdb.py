@@ -58,7 +58,7 @@ def flux_query(session: requests.Session, proxy_base: str, query: str,
             f"{proxy_base}/api/v2/query?orgID={ORG_ID}",
             headers=headers,
             timeout=60,
-            **post_kwargs,
+            **post_kwargs, # type: ignore
         )
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
         if debug:

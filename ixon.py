@@ -2,6 +2,7 @@
 
 import sys
 import base64
+import getpass
 import os
 import requests
 import json
@@ -25,7 +26,9 @@ def authenticate() -> tuple[dict, list[dict]]:
         return cached # If exists and not expired, return this and skip the process
 
     email = os.environ.get("IXON_EMAIL") or input("  Ixon email: ").strip()
-    password = os.environ.get("IXON_PASS") or input("  Ixon password: ").strip()
+    # getpass hides the typed password, showing * for each character instead
+    password = (os.environ.get("IXON_PASS")
+                or getpass.getpass("  Ixon password: ", echo_char="*").strip())
 
     # Try without 2FA first, then prompt if required
     otp = ""
