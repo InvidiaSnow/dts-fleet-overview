@@ -39,7 +39,7 @@ Download VS Code from [code.visualstudio.com](https://code.visualstudio.com), ru
 
 ### 2. Open a terminal in VS Code
 
-Open VS Code. In the menu at the top, choose **Terminal → New Terminal**. A panel with a blinking cursor opens at the bottom of the window. This is the terminal, where you paste the commands below.
+Open VS Code. In the menu at the top, choose **Terminal → New Terminal** (Ctrl + Shift + Ø). A panel with a blinking cursor opens at the bottom of the window. This is the terminal, where you paste the commands below. *The "Terminal" tab may be hidden under a three-dots button "..."*
 
 To run a command, copy it from this page, click in the terminal, paste with **Ctrl+V**, and press **Enter**.
 

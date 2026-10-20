@@ -23,7 +23,7 @@ REFRESH_MINUTES = 2.0 # How often to fetch new data when auto-refresh is on
 # -- Plot themes -- #
 
 # Background of the whole window, around the subplots
-FIGURE_BACKGROUND = "#4d4d4d"
+FIGURE_BACKGROUND = "#202020"
 TITLE_COLOR = "#ffffff"
 
 # One theme per status. Older traces fade from "trace" towards "background".
@@ -35,9 +35,9 @@ THEMES = {
         "text": "#FFFFFF",        # axis labels and tick numbers
     },
     "Stale": {
-        "background": "#666666",  # grey
+        "background": "#303030",  # grey
         "trace": "#ffffff",
-        "frame": "#333333",
+        "frame": "#3F3F3F",
         "text": "#FFFFFF",
     },
     "Default": {                  # used when status is None or unknown

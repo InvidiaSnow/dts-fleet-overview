@@ -13,6 +13,7 @@ from pathlib import Path
 IXON_APP_ID   = "9J9IZzeT4xN4"
 IXON_API_BASE = "https://api.ayayot.com"
 TOKEN_CACHE = Path("cache/ixon_token.json")
+EXPIRY_DURATION = 28800 # Duration of Ixon access token in seconds, min 60, max [60 days]
 
 def authenticate() -> tuple[dict, list[dict]]:
     """Login to Ixon, discover devices with InfluxDB. Done once per session.
@@ -48,7 +49,7 @@ def authenticate() -> tuple[dict, list[dict]]:
         resp = requests.post(
             f"{IXON_API_BASE}/access-tokens",
             headers=headers,
-            json={"expiresIn": 3600},
+            json={"expiresIn": EXPIRY_DURATION},
         )
 
         if resp.status_code == 201:
@@ -82,7 +83,7 @@ def authenticate() -> tuple[dict, list[dict]]:
 
     token = resp.json()["data"]["secretId"]
     headers["Authorization"] = f"Bearer {token}"
-    print("Ixon authenticated. Token valid for 1 hour.")
+    print(f"Ixon authenticated. Token valid for {EXPIRY_DURATION/3600} hour(s).")
 
     # Company
     resp2 = requests.get(
@@ -120,8 +121,8 @@ def authenticate() -> tuple[dict, list[dict]]:
         print("No InfluxDB servers found on any device.")
         sys.exit(1)
 
-    # Save authentication for the next hour
-    _save_cached_login(headers,devices)
+    # Save authentication
+    _save_cached_login(headers,devices,EXPIRY_DURATION)
 
     print(f"Found {len(devices)} device(s) with InfluxDB.")
     return headers, devices
